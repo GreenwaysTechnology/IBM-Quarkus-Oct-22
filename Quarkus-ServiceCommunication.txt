@@ -909,12 +909,285 @@ http://localhost:8080/greet
 ..................................................................................
 			Reliability -MicroService Pattern
 .................................................................................
+What is fault?
+
+Any System Subject to fail.
+
+Layers of system and its failures
+
+-Hardware failures
+-OS Failures
+-Network failures
+-Application failures
+
+Software failures:
+..................
+->JVM failures
+  -out of memory
+  -heap dump errors
+  -process related errors
+  -thread related errors
+-How to fix failures
+  -there tools available to detect memories,threads,heap dump 
+   -jmeter,heapdump errors, apache benchmark....
+
+Application failures:
+
+->Exception handling
+ file handling,database handling, call third party apis,networking, biz use case failures.
+
+-How to fix application errors
+  -Exception handlers--- give report , we can decide what do.
+
+try{
+ //what type of code i can write
+ //The code subject to fail, risky code. : The code may cause error any time.
+
+}
+catch(Exception e){
+  //for recovery code.
+  //you can report to other code or ui
+  //you can log those errors, you can audit latter.
+}
+..............................................................................................
+				Micro Services and Error Handling
+..............................................................................................
+
+You have to have idea that the system will fail at any point of time, if failure comes how to handle that.
+
+System failures and how to handle via patterns: Resilience Patterns:
+
+Quarkus and Falut Tolerance: 
+  Quarkus provides MicroProfile Fault Tolerance apis. 
 
 
+Fault Tolerance provides developers with the following strategies for dealing with failure:
 
 
+1.Timeout: Define a maximum duration for execution
+
+2.Retry: Attempt execution again if it fails
+
+3.Bulkhead: Limit concurrent execution so that failures in that area can’t overload the whole system
+
+4.CircuitBreaker: Automatically fail fast when execution repeatedly fails
+
+Solution /Handle any type failures:
+...................................
+Fallback: Provide an alternative solution when execution fails
+....................................................................................
 
 
+How to apply fault Tolerance?
 
+   Fault Tolerance provides an annotation for each strategy which can be placed on the methods of CDI beans. When an annotated method is called, the call is intercepted and the corresponding fault tolerance strategies are applied to the execution of that method.
+.....................................................................................
+			Quarkus Falut Tolerance implmentations
+
+
+ <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-smallrye-fault-tolerance</artifactId>
+  </dependency>
+
+Pattern -1: Bulk Head
+
+
+BulkHead:
+   The idea behind bulkhead is to set a limit on the number of concurrent calls we make to a remote service.
+
+ The Bulkhead pattern is to prevent faults in one part of the system from cascading to the entire system, which might bring down the whole system. The implementation is to limit the number of concurrent requests accessing to an instance.
+
+@Bulkhead(5) // maximum 5 concurrent requests allowed
+public Connection serviceA() {
+       Connection conn = null;
+       conn = connectionService();
+       return conn;
+}
+Steps:
+import org.eclipse.microprofile.faulttolerance.Bulkhead;
+import org.eclipse.microprofile.faulttolerance.Fallback;
+
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import javax.ws.rs.core.Response;
+
+@Path("/bulk")
+public class BulkHeadResource {
+
+    @GET
+    @Bulkhead(value = 5)
+    @Fallback(fallbackMethod = "handleBulkHead")
+    public Response dontOverload() {
+        System.out.println("Api is called");
+        return Response.ok("bulk").build();
+    }
+
+    public Response handleBulkHead() {
+        System.out.println("fallback response");
+        return Response.ok("sorry System busy").build();
+    }
+}
+
+How to test bulk head?
+
+you have to install any load testing tool
+-apache benchmark
+-Soap UI benchmark
+-node based tools
+ -loadtest
+
+How to install load test?
+
+npm install loadtest -g
+
+>loadtest -n 100 -c 10 http://localhost:8080/bulk
+.....................................................................................
+			   Timeout
+....................................................................................
+
+What is Timeout?
+   Setting a limit on the amount of time we are willing to wait for an operation to complete is called time limiting.
+   If the operation does not complete within the time we specified, we want to be notified about it with timeout Error.
+
+Sometime it is refered to as "setting a deadline"
+
+  @Timeout(400) // timeout is 400ms
+   public Connection serviceA() {
+       Connection conn = null;
+       conn = connectionService();
+       return conn;
+}
+
+
+import org.eclipse.microprofile.faulttolerance.Fallback;
+import org.eclipse.microprofile.faulttolerance.Timeout;
+
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+
+@Path("/timeout")
+public class TimeoutResource {
+
+    @GET
+    @Timeout(5000)
+    @Fallback(fallbackMethod = "getFromCache")
+    public String delay() throws InterruptedException {
+        randomDelay();
+        return "Hello";
+    }
+
+    private void randomDelay() throws InterruptedException {
+        // introduce some artificial delay
+        Thread.sleep(6000);
+    }
+
+    public String getFromCache() {
+        return "Fallback Response";
+    }
+}
+
+..............................................................................................	
+
+				 Fail fast and Fail slow -later
+					 Retry
+.............................................................................................
+
+Fail fast:
+ As soon as failure is dedecuted, either we throw exception, or we redirect with fallback.
+
+eg:
+  in Bulkhead 
+   if more conncurrency access than expected , it will throw BulkHeadExection, if exception
+ you can handle via fallback.
+
+  In Timeout
+   if there is delay in response than expected timeout , it will throw TimeoutExection, if exception  you can handle via fallback.
+
+SOme times i need to give a chance to recover from the failures.
+
+For eg , i call api, which fails due to network failure, i dont want to handle exception, i need to give chance to recover from those errors.
+
+Re-try - try automatically n of times within some time period of time.
+
+When you retry you can  customize when to retry.
+
+eg: 
+  i dont want to retry for SocketException,FileNotFoundException,MemoryoverFlowException
+  biz use cases like Login
+  if login failed in first attempt, dont retry.
+
+import org.eclipse.microprofile.faulttolerance.Fallback;
+import org.eclipse.microprofile.faulttolerance.Retry;
+
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
+
+@Path("/retry")
+public class RetryResource {
+    private AtomicLong counter = new AtomicLong(0);
+    private Float failRatio = 0.5f;
+
+    @GET
+    @Retry(maxRetries = 1, retryOn = RuntimeException.class)
+    @Fallback(fallbackMethod = "fallbakcoffeesList")
+    public List<String> coffees() {
+        final Long invocationNumber = counter.getAndIncrement();
+        maybeFail(String.format("CoffeeResource#coffees() invocation #%d failed", invocationNumber));
+        System.out.println("RetryResource#coffees() invocation #%d returning successfully" + invocationNumber);
+        return List.of("Coffee With Sugar", "Coffee Without Sugar", "Black Coffee");
+    }
+
+    public List<String> fallbakcoffeesList() {
+        System.out.println("Fallback");
+        return new ArrayList<>();
+    }
+
+    private void maybeFail(String failureLogMessage) {
+        // introduce some artificial failures
+        if (new Random().nextFloat() < failRatio) {
+            System.out.println(failureLogMessage);
+            throw new RuntimeException("Resource failure.");
+        }
+        //throw new RuntimeException("Resource failure.");
+    }
+}
+.....................................................................................
+				import org.eclipse.microprofile.faulttolerance.CircuitBreaker;
+import org.eclipse.microprofile.faulttolerance.Fallback;
+
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+import javax.ws.rs.core.Response;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
+
+@Path("/cb")
+public class CircuitBreakerResource {
+    private AtomicLong counter = new AtomicLong(0);
+
+    @GET
+    @CircuitBreaker(successThreshold = 10, requestVolumeThreshold = 4, failureRatio = 0.75, delay = 1000)
+    @Fallback(fallbackMethod = "cbFallback")
+    public Response circuitBreakerApi() {
+        maybeFailcb();
+        return Response.ok(new Random().nextInt(30)).build();
+    }
+
+    public Response cbFallback() {
+        return Response.ok().entity(100000).build();
+    }
+
+    private void maybeFailcb() {
+        final Long invocationNumber = counter.getAndIncrement();
+        if (invocationNumber % 4 > 1) {
+            throw new RuntimeException("Service failed");
+        }
+    }
+}
 
 
